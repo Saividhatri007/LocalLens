@@ -65,6 +65,16 @@ flowchart LR
 
 6. Open the local address printed in PowerShell, usually `http://localhost:8501`.
 
+## Run the smoke tests
+
+From the project folder, with the virtual environment active, run:
+
+```powershell
+py -m unittest -v test_locallens_core
+```
+
+The tests cover text-based PDF extraction, OCR-style line breaks, missing fields, CSV export, and the included image sample. The image OCR test is skipped if local Tesseract is unavailable.
+
 ## Demo
 
 Use the included fictional sample image, `locallens_sample_form.png`, or another synthetic or consented sample. Upload it, review the extracted values against the preview, edit any mistakes, and download CSV or JSON.
