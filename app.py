@@ -8,9 +8,12 @@ from locallens_core import (
     csv_bytes,
     extract_pdf,
     find_fields,
-    highlight_image_preview,
-    highlight_pdf_preview,
+    draw_prepared_pdf_page,
+    draw_prepared_preview,
     ocr_image,
+    pdf_page_count,
+    prepare_image_preview,
+    prepare_pdf_page_preview,
     pytesseract,
     redact_image_copy,
     redact_pdf_copy,
@@ -23,7 +26,9 @@ st.set_page_config(page_title="LocalLens", page_icon="🔎", layout="wide")
 st.markdown("""
 <style>
   :root { --ink:#3e342f; --muted:#88786f; --panel:#fffdf9; --panel2:#f4ece3; --line:#e5d8ca; --gold:#b87860; --mint:#628b70; }
-  .stApp { background: radial-gradient(ellipse at 50% -20%, #eee0d2 0%, #f7f3ed 58%); color:var(--ink); }
+  html, body, [data-testid="stAppViewContainer"] { background-color:#f7f3ed !important; }
+  .stApp, [data-testid="stAppViewContainer"] { background:radial-gradient(ellipse at 50% -20%, #eee0d2 0%, #f7f3ed 58%) fixed !important; color:var(--ink); }
+  [data-testid="stMain"] { background:transparent !important; }
   [data-testid="stHeader"] { background:rgba(247,243,237,0); }
   [data-testid="stAppViewContainer"] .main .block-container { max-width:1320px; padding-top:2.4rem; padding-bottom:3rem; }
   h1,h2,h3 { color:var(--ink); letter-spacing:-.02em; }
@@ -96,7 +101,7 @@ st.markdown("""
 def clear_document():
     st.session_state["document_upload"] = None
     for key in list(st.session_state.keys()):
-        if key.startswith("field_"):
+        if key.startswith(("field_", "pdf_pages_")):
             del st.session_state[key]
 
 
@@ -111,7 +116,7 @@ st.markdown("""
 
 def reset_workflow():
     for key in list(st.session_state.keys()):
-        if key == "document_upload" or key.startswith(("field_", "locallens_")):
+        if key == "document_upload" or key.startswith(("field_", "locallens_", "pdf_pages_")):
             del st.session_state[key]
     st.session_state["workflow_step"] = 1
 
@@ -132,23 +137,63 @@ if step == 1:
     if uploaded:
         raw = uploaded.getvalue()
         suffix = Path(uploaded.name).suffix.lower()
-        try:
-            if suffix == ".pdf":
-                extracted_text, error = extract_pdf(raw)
-            else:
+        extracted_text, error = "", ""
+        selected_pages = []
+        pdf_ready = True
+        pdf_has_results = False
+        if suffix == ".pdf":
+            try:
+                page_count = pdf_page_count(raw)
+            except Exception as exc:
+                page_count, pdf_ready = 0, False
+                error = f"LocalLens couldn’t open this PDF ({exc}). Check that it is a valid PDF, then try again."
+            if pdf_ready:
+                st.markdown("### Choose PDF pages")
+                st.caption(f"This PDF has {page_count} page{'s' if page_count != 1 else ''}. Select one or more pages for LocalLens to read. All pages are selected by default.")
+                selected_pages = st.multiselect(
+                    "Pages to read",
+                    options=list(range(1, page_count + 1)),
+                    default=list(range(1, page_count + 1)),
+                    format_func=lambda page_number: f"Page {page_number}",
+                    key=f"pdf_pages_{hashlib.sha1(raw).hexdigest()[:10]}",
+                    help="Choose only the pages you want to extract and review.",
+                )
+                read_key = hashlib.sha1(raw + (",".join(map(str, selected_pages))).encode("ascii")).hexdigest()
+                if selected_pages and st.button("Read selected page(s) →", type="primary", use_container_width=True):
+                    try:
+                        extracted_text, error = extract_pdf(raw, selected_pages)
+                    except Exception as exc:
+                        extracted_text, error = "", f"LocalLens couldn’t read the selected PDF pages ({exc}). Check the file and try again."
+                    st.session_state["locallens_read_key"] = read_key
+                    st.session_state["locallens_read_text"] = extracted_text
+                    st.session_state["locallens_read_error"] = error
+                    st.session_state["locallens_selected_pages"] = selected_pages
+                elif not selected_pages:
+                    st.warning("Select at least one page to continue.")
+                if st.session_state.get("locallens_read_key") == read_key:
+                    pdf_has_results = True
+                    extracted_text = st.session_state.get("locallens_read_text", "")
+                    error = st.session_state.get("locallens_read_error", "")
+            elif error:
+                pass
+        else:
+            try:
                 extracted_text, error = ocr_image(raw)
-        except Exception as exc:
-            extracted_text, error = "", f"LocalLens couldn’t open this file ({exc}). Check that it is a valid PDF or image, then try another file."
+            except Exception as exc:
+                extracted_text, error = "", f"LocalLens couldn’t open this file ({exc}). Check that it is a valid PDF or image, then try another file."
         if error:
             st.warning(error)
             st.caption("Your original file is not changed. Try a clear PDF, PNG, JPG, or TIFF file.")
             if st.button("Start over", on_click=reset_workflow):
                 st.rerun()
         elif not extracted_text:
-            st.warning("No readable text was found. Check the scan quality and make sure local Tesseract OCR is installed for images or scanned PDFs.")
-            st.caption("Try a sharper, well-lit image or a text-based PDF. Your original file is not changed.")
-            if st.button("Start over", on_click=reset_workflow):
-                st.rerun()
+            if suffix == ".pdf" and not pdf_has_results:
+                st.info("Choose the PDF pages you want, then select “Read selected page(s)” to continue.")
+            else:
+                st.warning("No readable text was found. Check the scan quality and make sure local Tesseract OCR is installed for images or scanned PDFs.")
+                st.caption("Try a sharper, well-lit image or a text-based PDF. Your original file is not changed.")
+                if st.button("Start over", on_click=reset_workflow):
+                    st.rerun()
         else:
             doc_id = hashlib.sha1(raw).hexdigest()[:10]
             detected = find_fields(extracted_text)
@@ -158,8 +203,11 @@ if step == 1:
             st.session_state["locallens_text"] = extracted_text
             st.session_state["locallens_fields"] = detected
             st.session_state["locallens_doc_id"] = doc_id
+            if suffix != ".pdf":
+                st.session_state["locallens_selected_pages"] = []
             summary_cards = st.columns(3)
-            for col, (label, value) in zip(summary_cards, (("File type", suffix.lstrip(".").upper()), ("Fields found", str(len(detected))), ("Processing", "On this device"))):
+            page_summary = f"Pages {', '.join(map(str, selected_pages))}" if suffix == ".pdf" else "Single image"
+            for col, (label, value) in zip(summary_cards, (("File type", suffix.lstrip(".").upper()), ("Fields found", str(len(detected))), ("Pages read", page_summary))):
                 with col:
                     st.metric(label, value)
             if not detected:
@@ -237,11 +285,28 @@ elif step == 2:
             st.subheader("Document preview")
             st.caption(name)
             st.caption("Matched values are highlighted where LocalLens can locate them. Use the source text and the original document to confirm each value.")
+            preview_cache = st.session_state.setdefault("locallens_preview_cache", {})
             if suffix == ".pdf":
-                preview, highlighted = highlight_pdf_preview(raw, edited)
+                pages_to_preview = st.session_state.get("locallens_selected_pages", [])
+                prepared_pages = []
+                for page_number in pages_to_preview:
+                    cache_key = f"{doc_id}:pdf:{page_number}"
+                    if cache_key not in preview_cache:
+                        preview_cache[cache_key] = prepare_pdf_page_preview(raw, page_number)
+                    prepared_pages.append(preview_cache[cache_key])
+                previews = [draw_prepared_pdf_page(item, edited) for item in prepared_pages if item]
+                highlighted = sorted({label for _, _, page_labels in previews for label in page_labels})
+                preview = bool(previews)
+                for page_number, page_image, page_labels in previews:
+                    st.image(page_image, caption=f"PDF page {page_number}" + (" · matched values highlighted" if page_labels else ""), use_container_width=True)
+                if not highlighted:
+                    st.caption("Text in digital PDFs is highlighted when matched. For scanned pages, compare the preview with the extracted values.")
             else:
-                preview, highlighted = highlight_image_preview(raw, edited)
-            if preview:
+                cache_key = f"{doc_id}:image"
+                if cache_key not in preview_cache:
+                    preview_cache[cache_key] = prepare_image_preview(raw)
+                preview, highlighted = draw_prepared_preview(preview_cache[cache_key], edited)
+            if suffix != ".pdf" and preview:
                 st.image(preview, caption="Detected values highlighted" if highlighted else "Document preview", use_container_width=True)
                 if highlighted:
                     st.caption("Highlighted fields: " + ", ".join(highlighted))
@@ -249,7 +314,7 @@ elif step == 2:
                     st.caption("Local OCR is needed to mark source locations in the preview.")
                 else:
                     st.caption("Could not match these values to visible words. Check them in the source text.")
-            else:
+            elif suffix != ".pdf" and not preview:
                 st.image(raw, use_container_width=True)
             with st.expander("View extracted text"):
                 st.text_area("Extracted text", extracted_text, height=240, label_visibility="collapsed")
@@ -288,20 +353,30 @@ elif step == 3:
     if redact_values:
         with st.container(border=True):
             st.subheader("Privacy copy")
-            st.caption("LocalLens will create a separate flattened copy with the selected values permanently covered.")
-            with st.spinner("Applying redactions locally…"):
+            st.caption("Create a separate flattened copy with the selected values permanently covered. This runs only when you click the button.")
+            redaction_key = hashlib.sha1(
+                st.session_state["locallens_document"] + json.dumps(redact_values, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            if st.button("Create redacted copy", key="create_redacted_copy"):
+                with st.spinner("Applying redactions locally…"):
+                    if st.session_state["locallens_suffix"] == ".pdf":
+                        result = redact_pdf_copy(st.session_state["locallens_document"], redact_values)
+                    else:
+                        result = redact_image_copy(st.session_state["locallens_document"], redact_values)
+                st.session_state["locallens_redaction_result"] = (redaction_key, result)
+            saved_result = st.session_state.get("locallens_redaction_result")
+            if saved_result and saved_result[0] == redaction_key:
+                redacted_copy, redacted_labels, missing_labels = saved_result[1]
                 if st.session_state["locallens_suffix"] == ".pdf":
-                    redacted_copy, redacted_labels, missing_labels = redact_pdf_copy(st.session_state["locallens_document"], redact_values)
                     redacted_name, mime = "locallens_redacted.pdf", "application/pdf"
                 else:
-                    redacted_copy, redacted_labels, missing_labels = redact_image_copy(st.session_state["locallens_document"], redact_values)
                     redacted_name, mime = "locallens_redacted.png", "image/png"
-            if redacted_copy:
-                st.success("Redacted: " + ", ".join(redacted_labels))
-                st.download_button("Download redacted copy", redacted_copy, redacted_name, mime, use_container_width=True, type="primary")
-                st.caption("This copy is flattened. Check it visually before sharing; the original file is unchanged.")
-            else:
-                st.warning("Could not safely locate every selected field in the document: " + ", ".join(missing_labels) + ". No redacted copy was created.")
+                if redacted_copy:
+                    st.success("Redacted: " + ", ".join(redacted_labels))
+                    st.download_button("Download redacted copy", redacted_copy, redacted_name, mime, use_container_width=True, type="primary")
+                    st.caption("This copy is flattened. Check it visually before sharing; the original file is unchanged.")
+                else:
+                    st.warning("Could not safely locate every selected field in the document: " + ", ".join(missing_labels) + ". No redacted copy was created.")
     st.caption("The extracted values are only as reliable as the source text. Keep reviewing sensitive details before use.")
     prev_col, clear_col = st.columns([1, 1])
     with prev_col:

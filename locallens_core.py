@@ -32,12 +32,32 @@ if pytesseract is not None:
             break
 
 
-def extract_pdf(data: bytes) -> tuple[str, str]:
+def pdf_page_count(data: bytes) -> int:
+    """Return the number of pages in a PDF, or raise a useful error."""
+    if fitz is None:
+        raise RuntimeError("Install PyMuPDF to read PDF files.")
+    document = fitz.open(stream=data, filetype="pdf")
+    try:
+        count = len(document)
+        if count < 1:
+            raise ValueError("This PDF has no pages to read.")
+        return count
+    finally:
+        document.close()
+
+
+def extract_pdf(data: bytes, selected_pages: list[int] | None = None) -> tuple[str, str]:
+    """Extract selected one-based PDF pages; None means every page."""
     if fitz is None:
         return "", "Install PyMuPDF to read PDF files."
     doc = fitz.open(stream=data, filetype="pdf")
+    page_numbers = list(range(1, len(doc) + 1)) if selected_pages is None else sorted(set(selected_pages))
+    if not page_numbers or any(number < 1 or number > len(doc) for number in page_numbers):
+        doc.close()
+        return "", "Choose one or more valid PDF pages to read."
     extracted_pages = []
-    for page_number, page in enumerate(doc, start=1):
+    for page_number in page_numbers:
+        page = doc[page_number - 1]
         page_text = page.get_text("text").strip()
         if not page_text and Image is not None and pytesseract is not None:
             try:
@@ -47,10 +67,10 @@ def extract_pdf(data: bytes) -> tuple[str, str]:
             except Exception as exc:
                 if not extracted_pages:
                     return "", f"Local OCR could not read scanned PDF page {page_number}: {exc}"
-        extracted_pages.append(page_text)
+        extracted_pages.append(f"[PDF page {page_number}]\n{page_text}" if page_text else "")
 
     text = "\n\n".join(page for page in extracted_pages if page).strip()
-    if not text and any(not page.get_text("text").strip() for page in doc):
+    if not text and any(not doc[number - 1].get_text("text").strip() for number in page_numbers):
         if Image is None or pytesseract is None:
             return "", "This looks like a scanned PDF. Install Tesseract OCR to read scanned PDF pages locally."
         return "", "No text could be read from this PDF. Check the scan quality and try again."
@@ -71,10 +91,10 @@ def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
 
 
-def _image_value_boxes(image, values: dict[str, str]) -> dict[str, list[tuple[int, int, int, int]]]:
-    """Locate requested text using local OCR word boxes."""
+def _image_ocr_groups(image):
+    """Read and group OCR word boxes once so the session can reuse them."""
     if Image is None or pytesseract is None:
-        return {}
+        return []
     data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
     groups = {}
     for i, word in enumerate(data["text"]):
@@ -88,8 +108,12 @@ def _image_value_boxes(image, values: dict[str, str]) -> dict[str, list[tuple[in
             int(data["left"][i] + data["width"][i]), int(data["top"][i] + data["height"][i]),
         ))
 
+    return [sorted(words, key=lambda word: word[0]) for words in groups.values()]
+
+
+def _match_values_to_ocr_groups(groups, values: dict[str, str]):
     matches = {label: [] for label in values}
-    for words in groups.values():
+    for words in groups:
         words.sort(key=lambda word: word[0])
         for label, value in values.items():
             target = _normalized(value)
@@ -109,6 +133,11 @@ def _image_value_boxes(image, values: dict[str, str]) -> dict[str, list[tuple[in
                     if len(combined) >= len(target) or not target.startswith(combined):
                         break
     return {label: boxes for label, boxes in matches.items() if boxes}
+
+
+def _image_value_boxes(image, values: dict[str, str]) -> dict[str, list[tuple[int, int, int, int]]]:
+    """Locate requested text using local OCR word boxes."""
+    return _match_values_to_ocr_groups(_image_ocr_groups(image), values)
 
 
 def _draw_highlights(image, matches: dict[str, list[tuple[int, int, int, int]]]):
@@ -144,6 +173,24 @@ def highlight_image_preview(data: bytes, values: dict[str, str]):
     return _png_bytes(_draw_highlights(image, matches)), list(matches)
 
 
+def prepare_image_preview(data: bytes):
+    """Prepare reusable image and OCR data for one app session."""
+    if Image is None:
+        return None
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    return _png_bytes(image), _image_ocr_groups(image) if pytesseract is not None else []
+
+
+def draw_prepared_preview(prepared, values: dict[str, str]):
+    """Draw changed highlights without repeating OCR on the same preview."""
+    if Image is None or not prepared:
+        return None, []
+    image_bytes, ocr_groups = prepared
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    matches = _match_values_to_ocr_groups(ocr_groups, values)
+    return _png_bytes(_draw_highlights(image, matches)), list(matches)
+
+
 def highlight_pdf_preview(data: bytes, values: dict[str, str]):
     if fitz is None or Image is None:
         return None, []
@@ -153,6 +200,48 @@ def highlight_pdf_preview(data: bytes, values: dict[str, str]):
     page_image = Image.open(io.BytesIO(document[0].get_pixmap(dpi=200, alpha=False).tobytes("png"))).convert("RGB")
     matches = _image_value_boxes(page_image, values) if pytesseract is not None else {}
     return _png_bytes(_draw_highlights(page_image, matches)), list(matches)
+
+
+def highlight_pdf_page_previews(data: bytes, values: dict[str, str], page_numbers: list[int]):
+    """Render selected one-based PDF pages with any locally matched values highlighted."""
+    prepared = [prepare_pdf_page_preview(data, number) for number in page_numbers]
+    return [draw_prepared_pdf_page(preview, values) for preview in prepared if preview]
+
+
+def prepare_pdf_page_preview(data: bytes, page_number: int):
+    """Render one PDF page and read its text-layer boxes for fast highlighting."""
+    if fitz is None or Image is None:
+        return None
+    document = fitz.open(stream=data, filetype="pdf")
+    try:
+        if page_number < 1 or page_number > len(document):
+            return None
+        page = document[page_number - 1]
+        page_image = Image.open(io.BytesIO(page.get_pixmap(dpi=160, alpha=False).tobytes("png"))).convert("RGB")
+        scale_x = page_image.width / page.rect.width
+        scale_y = page_image.height / page.rect.height
+        groups = {}
+        for word in page.get_text("words"):
+            x0, y0, x1, y1, text, block_number, line_number, word_number = word
+            token = _normalized(text)
+            if token:
+                groups.setdefault((block_number, line_number), []).append((
+                    word_number, token,
+                    int(x0 * scale_x), int(y0 * scale_y),
+                    int(x1 * scale_x), int(y1 * scale_y),
+                ))
+        return page_number, _png_bytes(page_image), [sorted(words, key=lambda item: item[0]) for words in groups.values()]
+    finally:
+        document.close()
+
+
+def draw_prepared_pdf_page(prepared, values: dict[str, str]):
+    if Image is None or not prepared:
+        return None
+    page_number, image_bytes, ocr_groups = prepared
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    matches = _match_values_to_ocr_groups(ocr_groups, values)
+    return page_number, _png_bytes(_draw_highlights(image, matches)), list(matches)
 
 
 def redact_image_copy(data: bytes, values: dict[str, str]):
