@@ -1,5 +1,6 @@
 import csv
 import hashlib
+from html import escape
 import io
 import json
 import re
@@ -72,6 +73,20 @@ st.markdown("""
   div[data-testid="stMetric"] { background:#fffdf9; padding:.9rem 1rem; border:1px solid var(--line); border-radius:14px; }
   div[data-testid="stMetricLabel"] { color:var(--muted) !important; }
   div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { color:var(--ink) !important; font-family:inherit !important; font-size:1.2rem !important; font-weight:700 !important; line-height:1.35 !important; }
+  .dashboard-card { min-height:128px; box-sizing:border-box; padding:1rem 1.05rem; border:1px solid #e1d0c1; border-radius:17px; background:#fffaf5; box-shadow:0 5px 16px rgba(92,65,49,.06); }
+  .dashboard-card.type { background:#f2e3d5; }
+  .dashboard-card.fields { background:#e9eee4; border-color:#d5dfcf; }
+  .dashboard-card.process { background:#efe3df; border-color:#e1cbc3; }
+  .dashboard-card.next { background:#eee8dc; border-color:#e0d6c5; }
+  .dashboard-card-head { display:flex; align-items:center; gap:.55rem; color:#78665b; font-size:.78rem; font-weight:700; }
+  .dashboard-card-icon { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:10px; background:rgba(255,255,255,.65); font-size:1rem; }
+  .dashboard-card-value { margin-top:.72rem; color:#3e342f; font-size:1.28rem; font-weight:750; line-height:1.2; }
+  .dashboard-card-detail { margin-top:.28rem; color:#88786f; font-size:.76rem; }
+  .step-chip { padding:.75rem 1rem; border:1px solid #e5d8ca; border-radius:13px; background:#fffaf5; color:#88786f; font-size:.9rem; font-weight:650; }
+  .step-chip.active { background:#b87860; border-color:#b87860; color:#fffaf5; }
+  .step-chip.done { background:#e8efe5; border-color:#d2dfcc; color:#4f7054; }
+  .screen-title { margin:.25rem 0 .3rem; }
+  .screen-intro { color:#76675e; margin-bottom:1rem; }
   hr { border-color:var(--line); }
   .stMarkdown, .stCaption, label, label p, [data-testid="stWidgetLabel"] p, [data-testid="stFileUploader"] { color:var(--ink) !important; }
   [data-testid="stCode"] { background:#f5ece3; border:1px solid #e5d8ca; border-radius:10px; }
@@ -197,89 +212,137 @@ st.markdown("""
 <div class="privacy-note">🔒 Designed for local processing &nbsp;·&nbsp; Use synthetic or consented sample documents</div>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="section-kicker">Step 1 · Add a document</div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("Upload a PDF, scan, or image", type=["pdf", "png", "jpg", "jpeg", "tif", "tiff"], label_visibility="collapsed", key="document_upload")
-st.caption("Supported files: PDF, PNG, JPG, TIFF")
+def reset_workflow():
+    for key in list(st.session_state.keys()):
+        if key == "document_upload" or key.startswith(("field_", "locallens_")):
+            del st.session_state[key]
+    st.session_state["workflow_step"] = 1
 
-if uploaded:
-    raw = uploaded.getvalue()
-    suffix = Path(uploaded.name).suffix.lower()
-    if suffix == ".pdf":
-        extracted_text, error = extract_pdf(raw)
+
+st.session_state.setdefault("workflow_step", 1)
+step = st.session_state["workflow_step"]
+step_cols = st.columns(3)
+for index, (col, label) in enumerate(zip(step_cols, ("1 · Upload", "2 · Review", "3 · Export")), start=1):
+    cls = "active" if index == step else ("done" if index < step else "")
+    with col:
+        st.markdown(f'<div class="step-chip {cls}">{label}</div>', unsafe_allow_html=True)
+st.write("")
+
+if step == 1:
+    st.markdown('<h2 class="screen-title">Add your document</h2><div class="screen-intro">Choose a PDF or image to extract a few useful details locally.</div>', unsafe_allow_html=True)
+    uploaded = st.file_uploader("Upload a PDF, scan, or image", type=["pdf", "png", "jpg", "jpeg", "tif", "tiff"], label_visibility="collapsed", key="document_upload")
+    st.caption("Supported files: PDF, PNG, JPG, TIFF")
+    if uploaded:
+        raw = uploaded.getvalue()
+        suffix = Path(uploaded.name).suffix.lower()
+        if suffix == ".pdf":
+            extracted_text, error = extract_pdf(raw)
+        else:
+            extracted_text, error = ocr_image(raw)
+        if error:
+            st.warning(error)
+        elif not extracted_text:
+            st.warning("No text was found. A scanned PDF needs OCR; image files use your local Tesseract installation.")
+        else:
+            doc_id = hashlib.sha1(raw).hexdigest()[:10]
+            detected = find_fields(extracted_text)
+            st.session_state["locallens_document"] = raw
+            st.session_state["locallens_name"] = uploaded.name
+            st.session_state["locallens_suffix"] = suffix
+            st.session_state["locallens_text"] = extracted_text
+            st.session_state["locallens_fields"] = detected
+            st.session_state["locallens_doc_id"] = doc_id
+            summary_cards = st.columns(3)
+            for col, (label, value) in zip(summary_cards, (("File type", suffix.lstrip(".").upper()), ("Fields found", str(len(detected))), ("Processing", "On this device"))):
+                with col:
+                    st.metric(label, value)
+            if not detected:
+                st.info("Text was read, but no supported fields were detected. You can still inspect the text in the review step.")
+            if st.button("Continue to review →", type="primary", use_container_width=True):
+                st.session_state["workflow_step"] = 2
+                st.rerun()
     else:
-        extracted_text, error = ocr_image(raw)
+        st.info("Try the included fictional sample form or another synthetic/consented document.")
+        feature_cols = st.columns(3)
+        for col, icon, title, detail in zip(
+            feature_cols,
+            ("📄", "✍️", "📤"),
+            ("Read locally", "Review together", "Export when ready"),
+            ("Extract text from PDFs and images on this computer.", "Check values against source text and edit mistakes.", "Download reviewed fields as CSV or JSON."),
+        ):
+            with col:
+                with st.container(border=True):
+                    st.markdown(f"### {icon} {title}")
+                    st.write(detail)
 
-    if error:
-        st.warning(error)
+elif step == 2:
+    raw = st.session_state.get("locallens_document")
+    if raw is None:
+        st.session_state["workflow_step"] = 1
+        st.rerun()
+    name = st.session_state["locallens_name"]
+    suffix = st.session_state["locallens_suffix"]
+    extracted_text = st.session_state["locallens_text"]
+    detected = st.session_state.get("locallens_fields", {}) or {"Field 1": ""}
+    doc_id = st.session_state["locallens_doc_id"]
+    st.markdown('<h2 class="screen-title">Review extracted details</h2><div class="screen-intro">Compare each value with the source, then continue when it looks right.</div>', unsafe_allow_html=True)
+    left, right = st.columns([1.05, 1])
+    with left:
+        with st.container(border=True):
+            st.subheader("Document preview")
+            st.caption(name)
+            if suffix == ".pdf":
+                preview = pdf_first_page_preview(raw)
+                if preview:
+                    st.image(preview, caption="Page 1", use_container_width=True)
+            elif Image is not None:
+                st.image(raw, use_container_width=True)
+            with st.expander("View extracted text"):
+                st.text_area("Extracted text", extracted_text, height=240, label_visibility="collapsed")
+    with right:
+        with st.container(border=True):
+            st.subheader("Check the fields")
+            st.caption("These are suggestions. Correct anything that doesn’t match.")
+            edited = {}
+            for label, value in detected.items():
+                edited[label] = st.text_input(label, value=value, key=f"field_{doc_id}_{label}")
+                st.caption(f"{value_status(label, edited[label])} · verify with the source")
+            with st.expander("Show source text for these values"):
+                for label, value in edited.items():
+                    st.markdown(f"**{label}**")
+                    st.code(source_evidence(extracted_text, value), language=None)
+    nav_back, nav_spacer, nav_next = st.columns([1, 2, 1])
+    with nav_back:
+        if st.button("← Change document", use_container_width=True):
+            st.session_state["workflow_step"] = 1
+            st.rerun()
+    with nav_next:
+        if st.button("Continue to export →", type="primary", use_container_width=True):
+            st.session_state["locallens_reviewed"] = edited
+            st.session_state["workflow_step"] = 3
+            st.rerun()
 
-    if extracted_text:
-        detected = find_fields(extracted_text)
-        doc_id = hashlib.sha1(raw).hexdigest()[:10]
-        st.markdown('<div class="status-pill">✓ Document processed</div>', unsafe_allow_html=True)
-        st.write("")
-        metric_a, metric_b, metric_c, metric_d = st.columns(4)
-        metric_a.metric("File type", suffix.lstrip(".").upper())
-        metric_b.metric("Fields found", len(detected))
-        metric_c.metric("Processing", "On this device")
-        metric_d.metric("Next step", "Review values")
-        st.markdown('<div class="section-kicker">Step 2 · Review results</div>', unsafe_allow_html=True)
-        left, right = st.columns([1.1, 1])
-        with left:
-            with st.container(border=True):
-                st.subheader("Your document")
-                st.caption(uploaded.name)
-                if suffix != ".pdf" and Image is not None:
-                    st.image(raw, use_container_width=True)
-                elif suffix == ".pdf":
-                    preview = pdf_first_page_preview(raw)
-                    if preview:
-                        st.image(preview, caption="Page 1 preview", use_container_width=True)
-                with st.expander("View extracted text"):
-                    st.text_area("Extracted text", extracted_text, height=250, label_visibility="collapsed")
-        with right:
-            with st.container(border=True):
-                st.subheader("Check the details")
-                st.caption("Correct anything that doesn’t match the document.")
-                if not detected:
-                    st.info("No supported fields were detected automatically. You can still review the extracted text.")
-                    detected = {"Field 1": ""}
-                edited = {}
-                for label, value in detected.items():
-                    edited[label] = st.text_input(label, value=value, key=f"field_{doc_id}_{label}")
-                    status = value_status(label, edited[label])
-                    st.caption(f"{status} · confirm against the source")
-                with st.expander("Show source text for extracted values"):
-                    for label, value in edited.items():
-                        st.markdown(f"**{label}**")
-                        st.code(source_evidence(extracted_text, value), language=None)
-                rows = [{"Field": key, "Value": value} for key, value in edited.items()]
-                st.markdown('<div class="section-kicker">Step 3 · Export reviewed details</div>', unsafe_allow_html=True)
-                exp1, exp2 = st.columns(2)
-                with exp1:
-                    st.download_button("Download CSV", csv_bytes(rows), "locallens_results.csv", "text/csv", use_container_width=True, type="primary")
-                with exp2:
-                    st.download_button("Download JSON", json.dumps(edited, indent=2), "locallens_results.json", "application/json", use_container_width=True)
-        privacy_col, clear_col = st.columns([3, 1])
-        with privacy_col:
-            with st.expander("Privacy and processing details"):
-                st.write("This app runs from your computer. PDF reading uses local text extraction, and image reading uses the local Tesseract installation. The prototype does not send documents to a cloud OCR or AI service. Use sample or consented files, and review extracted values.")
-        with clear_col:
-            st.button("Clear document", on_click=clear_document, use_container_width=True)
-        with st.expander("About these results"):
-            st.write("Field checks show formatting hints only; they are not accuracy or confidence scores. Extraction uses OCR plus simple text patterns, so check every value against the document before using it.")
-    elif not error:
-        st.info("No text was found. This may be a scanned PDF; scanned-PDF OCR is a planned next step.")
-else:
-    st.info("Start with a synthetic sample form containing labels such as Name, Email, Phone, Date of Birth, or ID Number.")
-    st.markdown('<div class="section-kicker">A simple three-step workflow</div>', unsafe_allow_html=True)
-    feature_cols = st.columns(3)
-    for col, icon, title, detail in zip(
-        feature_cols,
-        ("📄", "✍️", "📤"),
-        ("Read locally", "Review together", "Export when ready"),
-        ("Extract text from PDFs and images on this computer.", "Check values against source text and edit mistakes.", "Download reviewed fields as CSV or JSON."),
-    ):
-        with col:
-            with st.container(border=True):
-                st.markdown(f"### {icon} {title}")
-                st.write(detail)
+elif step == 3:
+    if "locallens_document" not in st.session_state:
+        st.session_state["workflow_step"] = 1
+        st.rerun()
+    edited = st.session_state.get("locallens_reviewed", {})
+    st.markdown('<h2 class="screen-title">Your reviewed data is ready</h2><div class="screen-intro">Download a copy in the format that fits your next step.</div>', unsafe_allow_html=True)
+    st.success(f"{len(edited)} fields ready to export")
+    with st.container(border=True):
+        st.subheader("Export preview")
+        st.dataframe([{"Field": key, "Reviewed value": value} for key, value in edited.items()], hide_index=True, use_container_width=True)
+        rows = [{"Field": key, "Value": value} for key, value in edited.items()]
+        export_csv, export_json = st.columns(2)
+        with export_csv:
+            st.download_button("Download CSV", csv_bytes(rows), "locallens_results.csv", "text/csv", use_container_width=True, type="primary")
+        with export_json:
+            st.download_button("Download JSON", json.dumps(edited, indent=2), "locallens_results.json", "application/json", use_container_width=True)
+    st.caption("The extracted values are only as reliable as the source text. Keep reviewing sensitive details before use.")
+    prev_col, clear_col = st.columns([1, 1])
+    with prev_col:
+        if st.button("← Back to review", use_container_width=True):
+            st.session_state["workflow_step"] = 2
+            st.rerun()
+    with clear_col:
+        st.button("Finish and clear document", on_click=reset_workflow, use_container_width=True)

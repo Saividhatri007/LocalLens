@@ -16,6 +16,7 @@ LocalLens is a local web app that reads text from PDFs and images, finds a small
 
 ## Current features
 
+- Guided three-screen workflow: upload, review, and export.
 - Extract text from text-based PDF files.
 - Read text from image files with locally installed Tesseract OCR.
 - Find common fields: name, email, phone, date, and ID number.
