@@ -87,6 +87,15 @@ st.markdown("""
   .step-chip.done { background:#e8efe5; border-color:#d2dfcc; color:#4f7054; }
   .screen-title { margin:.25rem 0 .3rem; }
   .screen-intro { color:#76675e; margin-bottom:1rem; }
+  .welcome-card { min-height:205px; padding:1.15rem 1.2rem; border:1px solid #e1d0c1; border-radius:19px; box-shadow:0 7px 18px rgba(92,65,49,.06); transition:transform .18s ease, box-shadow .18s ease; }
+  .welcome-card:hover { transform:translateY(-3px); box-shadow:0 11px 24px rgba(92,65,49,.11); }
+  .welcome-card.read { background:linear-gradient(145deg,#f4e4d7,#fbf5ee); }
+  .welcome-card.review { background:linear-gradient(145deg,#e8eee3,#f6f8f2); border-color:#d4dfcd; }
+  .welcome-card.export { background:linear-gradient(145deg,#efe2de,#faf3f0); border-color:#e3cfca; }
+  .welcome-step { color:#9a6d5a; font-size:.7rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+  .welcome-icon { display:flex; align-items:center; justify-content:center; width:48px; height:48px; margin:.8rem 0 .65rem; border-radius:15px; background:rgba(255,255,255,.72); font-size:1.45rem; }
+  .welcome-card h3 { margin:.1rem 0 .35rem; font-size:1.08rem; }
+  .welcome-card p { margin:0; color:#74665e; font-size:.88rem; line-height:1.5; }
   hr { border-color:var(--line); }
   .stMarkdown, .stCaption, label, label p, [data-testid="stWidgetLabel"] p, [data-testid="stFileUploader"] { color:var(--ink) !important; }
   [data-testid="stCode"] { background:#f5ece3; border:1px solid #e5d8ca; border-radius:10px; }
@@ -262,18 +271,20 @@ if step == 1:
                 st.session_state["workflow_step"] = 2
                 st.rerun()
     else:
-        st.info("Try the included fictional sample form or another synthetic/consented document.")
+        st.info("Try the fictional sample form or another synthetic/consented document.")
+        st.markdown('<div class="section-kicker">A simple, privacy-first workflow</div>', unsafe_allow_html=True)
         feature_cols = st.columns(3)
-        for col, icon, title, detail in zip(
-            feature_cols,
-            ("📄", "✍️", "📤"),
-            ("Read locally", "Review together", "Export when ready"),
-            ("Extract text from PDFs and images on this computer.", "Check values against source text and edit mistakes.", "Download reviewed fields as CSV or JSON."),
-        ):
+        cards = [
+            ("read", "01 · PROCESS", "🛡️", "Read on this device", "PDF text and image OCR are handled by local tools in your app session."),
+            ("review", "02 · CHECK", "🔎", "Review with context", "Compare extracted details with the source and correct anything that looks wrong."),
+            ("export", "03 · USE", "📤", "Export when ready", "Download the reviewed fields as CSV or JSON for your next step."),
+        ]
+        for col, (style, number, icon, title, detail) in zip(feature_cols, cards):
             with col:
-                with st.container(border=True):
-                    st.markdown(f"### {icon} {title}")
-                    st.write(detail)
+                st.markdown(
+                    f'<div class="welcome-card {style}"><div class="welcome-step">{escape(number)}</div><div class="welcome-icon">{icon}</div><h3>{escape(title)}</h3><p>{escape(detail)}</p></div>',
+                    unsafe_allow_html=True,
+                )
 
 elif step == 2:
     raw = st.session_state.get("locallens_document")
