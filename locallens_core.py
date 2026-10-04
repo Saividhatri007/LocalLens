@@ -35,7 +35,24 @@ def extract_pdf(data: bytes) -> tuple[str, str]:
     if fitz is None:
         return "", "Install PyMuPDF to read PDF files."
     doc = fitz.open(stream=data, filetype="pdf")
-    text = "\n".join(page.get_text("text") for page in doc).strip()
+    extracted_pages = []
+    for page_number, page in enumerate(doc, start=1):
+        page_text = page.get_text("text").strip()
+        if not page_text and Image is not None and pytesseract is not None:
+            try:
+                pixmap = page.get_pixmap(dpi=200, alpha=False)
+                image = Image.open(io.BytesIO(pixmap.tobytes("png")))
+                page_text = pytesseract.image_to_string(image, lang="eng").strip()
+            except Exception as exc:
+                if not extracted_pages:
+                    return "", f"Local OCR could not read scanned PDF page {page_number}: {exc}"
+        extracted_pages.append(page_text)
+
+    text = "\n\n".join(page for page in extracted_pages if page).strip()
+    if not text and any(not page.get_text("text").strip() for page in doc):
+        if Image is None or pytesseract is None:
+            return "", "This looks like a scanned PDF. Install Tesseract OCR to read scanned PDF pages locally."
+        return "", "No text could be read from this PDF. Check the scan quality and try again."
     return text, ""
 
 

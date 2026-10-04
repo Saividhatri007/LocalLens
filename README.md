@@ -17,7 +17,7 @@ LocalLens is a local web app that reads text from PDFs and images, finds a small
 ## Current features
 
 - Guided three-screen workflow: upload, review, and export.
-- Extract text from text-based PDF files.
+- Extract text from digital PDFs and scanned PDF pages using local OCR.
 - Read text from image files with locally installed Tesseract OCR.
 - Find common fields: name, email, phone, date, and ID number.
 - Show a document preview and the extracted text.
@@ -47,7 +47,7 @@ flowchart LR
 ## Run on Windows
 
 1. Install Python 3.10 or newer.
-2. For image OCR, install Tesseract for Windows and include English language data. Text-based PDFs do not need Tesseract.
+2. For image OCR and scanned PDF pages, install Tesseract for Windows and include English language data. Text-based PDFs do not need Tesseract.
 3. Open PowerShell in the LocalLens folder.
 4. Create and activate a virtual environment:
 

@@ -42,6 +42,22 @@ class LocalLensCoreTests(unittest.TestCase):
             "Email": "avery.sample@example.test",
         })
 
+    @unittest.skipUnless(OCR_AVAILABLE, "Local Tesseract OCR is not installed")
+    def test_scanned_pdf_uses_local_ocr(self):
+        if core.fitz is None:
+            self.skipTest("PyMuPDF is not installed")
+        document = core.fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_image(page.rect, stream=SAMPLE_IMAGE.read_bytes())
+
+        text, error = core.extract_pdf(document.tobytes())
+        self.assertEqual(error, "")
+        fields = core.find_fields(text)
+        self.assertEqual(fields.get("Name"), "Avery Sample")
+        self.assertEqual(fields.get("Email"), "avery.sample@example.test")
+        self.assertEqual(fields.get("Date"), "14/08/2002")
+        self.assertEqual(fields.get("ID Number"), "DEMO-482913")
+
     def test_ocr_style_split_labels_and_values(self):
         text = """SAMPLE FORM
 Full Name

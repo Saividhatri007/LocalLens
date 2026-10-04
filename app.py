@@ -132,7 +132,7 @@ if step == 1:
         if error:
             st.warning(error)
         elif not extracted_text:
-            st.warning("No text was found. A scanned PDF needs OCR; image files use your local Tesseract installation.")
+            st.warning("No readable text was found. Check the scan quality and make sure local Tesseract OCR is installed for images or scanned PDFs.")
         else:
             doc_id = hashlib.sha1(raw).hexdigest()[:10]
             detected = find_fields(extracted_text)
