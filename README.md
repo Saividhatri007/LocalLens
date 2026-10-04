@@ -21,9 +21,11 @@ LocalLens is a local web app that reads text from PDFs and images, finds a small
 - Read text from image files with locally installed Tesseract OCR.
 - Find common fields: name, email, phone, date, and ID number.
 - Show a document preview and the extracted text.
+- Highlight detected values in the document preview.
 - Let the user correct extracted values and inspect nearby source text.
 - Show basic format hints. These are not accuracy or confidence scores.
 - Export reviewed fields as CSV or JSON.
+- Optionally create a flattened copy with selected fields permanently covered.
 - Clear the uploaded document from the current app session.
 
 ## Technology stack
@@ -73,7 +75,7 @@ From the project folder, with the virtual environment active, run:
 py -m unittest -v test_locallens_core
 ```
 
-The tests cover text-based PDF extraction, OCR-style line breaks, missing fields, CSV export, and the included image sample. The image OCR test is skipped if local Tesseract is unavailable.
+The tests cover text-based and scanned PDF extraction, OCR-style line breaks, missing fields, CSV export, image highlights, and redaction of synthetic image/PDF samples. OCR-dependent tests are skipped if local Tesseract is unavailable.
 
 ## Demo
 
@@ -81,7 +83,7 @@ Use the included fictional sample image, `locallens_sample_form.png`, or another
 
 ## Privacy and limitations
 
-The prototype performs PDF extraction and OCR locally and does not intentionally send document content to a cloud OCR or AI service. Before describing offline operation as verified, test with the internet disconnected and review the installed dependencies. OCR and simple text patterns can make mistakes; users should verify every value. The first version supports a limited set of fields and layouts and is not intended to make decisions about people.
+The prototype performs PDF extraction and OCR locally and does not intentionally send document content to a cloud OCR or AI service. Redacted downloads are flattened image-based copies; the original is unchanged. Check the downloaded copy visually before sharing it. Before describing offline operation as verified, test with the internet disconnected and review the installed dependencies. OCR and simple text patterns can make mistakes; users should verify every value. The first version supports a limited set of fields and layouts and is not intended to make decisions about people.
 
 ## Evaluation planned for the checkpoint
 

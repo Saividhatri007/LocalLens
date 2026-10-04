@@ -94,6 +94,45 @@ DEMO-482913"""
         self.assertEqual(fields.get("ID Number"), "DEMO-482913")
         self.assertEqual("".join(filter(str.isdigit, fields.get("Phone", ""))), "15550102048")
 
+    @unittest.skipUnless(OCR_AVAILABLE, "Local Tesseract OCR is not installed")
+    def test_source_highlights_locate_sample_values(self):
+        text, error = core.ocr_image(SAMPLE_IMAGE.read_bytes())
+        self.assertEqual(error, "")
+        fields = core.find_fields(text)
+        preview, highlighted = core.highlight_image_preview(SAMPLE_IMAGE.read_bytes(), fields)
+        self.assertIsNotNone(preview)
+        self.assertEqual(set(highlighted), set(fields))
+
+    @unittest.skipUnless(OCR_AVAILABLE, "Local Tesseract OCR is not installed")
+    def test_image_redaction_covers_selected_values(self):
+        selected = {"Name": "Avery Sample", "Email": "avery.sample@example.test"}
+        redacted, matched, missing = core.redact_image_copy(SAMPLE_IMAGE.read_bytes(), selected)
+        self.assertEqual(missing, [])
+        self.assertEqual(set(matched), set(selected))
+        text, error = core.ocr_image(redacted)
+        self.assertEqual(error, "")
+        self.assertNotIn("Avery Sample", text)
+        self.assertNotIn("avery.sample@example.test", text)
+
+    @unittest.skipUnless(OCR_AVAILABLE, "Local Tesseract OCR is not installed")
+    def test_scanned_pdf_redaction_creates_flattened_copy(self):
+        if core.fitz is None:
+            self.skipTest("PyMuPDF is not installed")
+        source = core.fitz.open()
+        page = source.new_page(width=612, height=792)
+        page.insert_image(page.rect, stream=SAMPLE_IMAGE.read_bytes())
+        selected = {"Name": "Avery Sample", "Email": "avery.sample@example.test"}
+        redacted, matched, missing = core.redact_pdf_copy(source.tobytes(), selected)
+        self.assertEqual(missing, [])
+        self.assertEqual(set(matched), set(selected))
+        flattened = core.fitz.open(stream=redacted, filetype="pdf")
+        self.assertEqual(flattened.page_count, 1)
+        self.assertEqual(flattened[0].get_text("text").strip(), "")
+        remaining_text, error = core.extract_pdf(redacted)
+        self.assertEqual(error, "")
+        self.assertNotIn("Avery Sample", remaining_text)
+        self.assertNotIn("avery.sample@example.test", remaining_text)
+
     def test_csv_export_contains_reviewed_fields(self):
         csv_data = core.csv_bytes([{"Field": "Name", "Value": "Avery Sample"}]).decode("utf-8")
         self.assertIn("Field,Value", csv_data)

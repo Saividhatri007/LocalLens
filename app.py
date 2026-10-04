@@ -8,8 +8,12 @@ from locallens_core import (
     csv_bytes,
     extract_pdf,
     find_fields,
+    highlight_image_preview,
+    highlight_pdf_preview,
     ocr_image,
-    pdf_first_page_preview,
+    pytesseract,
+    redact_image_copy,
+    redact_pdf_copy,
     source_evidence,
     value_status,
 )
@@ -179,18 +183,7 @@ elif step == 2:
     doc_id = st.session_state["locallens_doc_id"]
     st.markdown('<h2 class="screen-title">Review extracted details</h2><div class="screen-intro">Compare each value with the source, then continue when it looks right.</div>', unsafe_allow_html=True)
     left, right = st.columns([1.05, 1])
-    with left:
-        with st.container(border=True):
-            st.subheader("Document preview")
-            st.caption(name)
-            if suffix == ".pdf":
-                preview = pdf_first_page_preview(raw)
-                if preview:
-                    st.image(preview, caption="Page 1", use_container_width=True)
-            else:
-                st.image(raw, use_container_width=True)
-            with st.expander("View extracted text"):
-                st.text_area("Extracted text", extracted_text, height=240, label_visibility="collapsed")
+    edited = {label: st.session_state.get(f"field_{doc_id}_{label}", value) for label, value in detected.items()}
     with right:
         with st.container(border=True):
             st.subheader("Check the fields")
@@ -203,6 +196,32 @@ elif step == 2:
                 for label, value in edited.items():
                     st.markdown(f"**{label}**")
                     st.code(source_evidence(extracted_text, value), language=None)
+            with st.expander("Optional · redact fields in a copy"):
+                st.caption("Select details to cover with permanent black bars in a separate download.")
+                redact_values = {}
+                for label, value in edited.items():
+                    if value and st.checkbox(f"Redact {label}", key=f"redact_{doc_id}_{label}"):
+                        redact_values[label] = value
+    with left:
+        with st.container(border=True):
+            st.subheader("Document preview")
+            st.caption(name)
+            if suffix == ".pdf":
+                preview, highlighted = highlight_pdf_preview(raw, edited)
+            else:
+                preview, highlighted = highlight_image_preview(raw, edited)
+            if preview:
+                st.image(preview, caption="Detected values highlighted" if highlighted else "Document preview", use_container_width=True)
+                if highlighted:
+                    st.caption("Highlighted fields: " + ", ".join(highlighted))
+                elif pytesseract is None:
+                    st.caption("Local OCR is needed to mark source locations in the preview.")
+                else:
+                    st.caption("Could not match these values to visible words. Check them in the source text.")
+            else:
+                st.image(raw, use_container_width=True)
+            with st.expander("View extracted text"):
+                st.text_area("Extracted text", extracted_text, height=240, label_visibility="collapsed")
     nav_back, nav_spacer, nav_next = st.columns([1, 2, 1])
     with nav_back:
         if st.button("← Change document", use_container_width=True):
@@ -211,6 +230,7 @@ elif step == 2:
     with nav_next:
         if st.button("Continue to export →", type="primary", use_container_width=True):
             st.session_state["locallens_reviewed"] = edited
+            st.session_state["locallens_redact_values"] = redact_values
             st.session_state["workflow_step"] = 3
             st.rerun()
 
@@ -230,6 +250,24 @@ elif step == 3:
             st.download_button("Download CSV", csv_bytes(rows), "locallens_results.csv", "text/csv", use_container_width=True, type="primary")
         with export_json:
             st.download_button("Download JSON", json.dumps(edited, indent=2), "locallens_results.json", "application/json", use_container_width=True)
+    redact_values = st.session_state.get("locallens_redact_values", {})
+    if redact_values:
+        with st.container(border=True):
+            st.subheader("Privacy copy")
+            st.caption("LocalLens will create a separate flattened copy with the selected values permanently covered.")
+            with st.spinner("Applying redactions locally…"):
+                if st.session_state["locallens_suffix"] == ".pdf":
+                    redacted_copy, redacted_labels, missing_labels = redact_pdf_copy(st.session_state["locallens_document"], redact_values)
+                    redacted_name, mime = "locallens_redacted.pdf", "application/pdf"
+                else:
+                    redacted_copy, redacted_labels, missing_labels = redact_image_copy(st.session_state["locallens_document"], redact_values)
+                    redacted_name, mime = "locallens_redacted.png", "image/png"
+            if redacted_copy:
+                st.success("Redacted: " + ", ".join(redacted_labels))
+                st.download_button("Download redacted copy", redacted_copy, redacted_name, mime, use_container_width=True, type="primary")
+                st.caption("This copy is flattened. Check it visually before sharing; the original file is unchanged.")
+            else:
+                st.warning("Could not safely locate every selected field in the document: " + ", ".join(missing_labels) + ". No redacted copy was created.")
     st.caption("The extracted values are only as reliable as the source text. Keep reviewing sensitive details before use.")
     prev_col, clear_col = st.columns([1, 1])
     with prev_col:
