@@ -2,7 +2,7 @@
 
 **Privacy-first, local document parsing prototype** for the HackFusion software-domain hackathon.
 
-> Team: [Add team name and member names]  
+> Team: ContructX,Member Name:Saividhatri Aluguri 
 > Round: 2 progress checkpoint  
 > Status: Working prototype; accuracy and offline behavior still need systematic evaluation.
 
