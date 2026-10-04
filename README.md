@@ -20,13 +20,14 @@ LocalLens is a local web app that reads text from PDFs and images, finds a small
 - Extract text from digital PDFs and scanned PDF pages using local OCR.
 - Read text from image files with locally installed Tesseract OCR.
 - Find common fields: name, email, phone, date, and ID number.
-- Show a document preview and the extracted text.
+- Show a document preview and the extracted text, with matched values highlighted where possible.
 - Highlight detected values in the document preview.
 - Let the user correct extracted values and inspect nearby source text.
-- Show basic format hints. These are not accuracy or confidence scores.
+- Show review labels based on whether the edited value appears in the extracted source text and passes a basic format check. These are evidence hints, not OCR accuracy scores.
+- Warn when common fields are missing, explain common read errors, and offer a quick way to start over.
 - Export reviewed fields as CSV or JSON.
 - Optionally create a flattened copy with selected fields permanently covered.
-- Clear the uploaded document from the current app session.
+- Show where processing happens and how long the uploaded document remains in the active app session; clear it with the finish button or start over.
 
 ## Technology stack
 

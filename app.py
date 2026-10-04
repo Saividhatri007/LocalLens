@@ -42,6 +42,7 @@ st.markdown("""
   .field-label { color:#c4cdd1; font-size:.82rem; font-weight:650; margin-bottom:.25rem; }
   .status-pill { display:inline-block; border-radius:99px; padding:.3rem .65rem; color:#4d755b;
           background:#e8f0e8; border:1px solid #ccdfce; font-size:.78rem; font-weight:700; }
+  .status-pill.review-pill { color:#8a542c; background:#fff0dc; border-color:#edcfaa; }
   .stButton button, .stDownloadButton button { border-radius:10px; min-height:2.7rem; font-weight:700; }
   .stButton button { background:#f2e5da !important; color:#493a33 !important; border:1px solid #d8bba8 !important; }
   .stDownloadButton button { background:#f2e5da !important; color:#493a33 !important; border:1px solid #d8bba8 !important; }
@@ -83,9 +84,11 @@ st.markdown("""
   .welcome-card p { margin:0; color:#74665e; font-size:.88rem; line-height:1.5; }
   hr { border-color:var(--line); }
   .stMarkdown, .stCaption, label, label p, [data-testid="stWidgetLabel"] p, [data-testid="stFileUploader"] { color:var(--ink) !important; }
-  [data-testid="stCode"] { background:#f5ece3; border:1px solid #e5d8ca; border-radius:10px; }
-  [data-testid="stCode"] pre, [data-testid="stCode"] code { color:#493a33 !important; }
+  [data-testid="stCode"], [data-testid="stCode"] pre, [data-testid="stCode"] code,
+  [data-testid="stCode"] pre span { background:#f5ece3 !important; color:#493a33 !important; border-color:#e5d8ca !important; }
   [data-testid="stExpander"] { background:#fffdf9; border:1px solid var(--line); border-radius:12px; }
+  [data-testid="stExpander"] details, [data-testid="stExpander"] summary,
+  [data-testid="stExpander"] summary * { background:#fffaf5 !important; color:#493a33 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -103,7 +106,7 @@ st.markdown("""
   <div class="hero-row"><div class="hero-icon">🔎</div><div><h1>LocalLens</h1>
     <p>Turn documents into editable, reviewable information.</p></div></div>
 </div>
-<div class="privacy-note">🔒 Designed for local processing &nbsp;·&nbsp; Use synthetic or consented sample documents</div>
+<div class="privacy-note">🔒 Files are processed by the machine running this app. When you run it on your own PC, processing stays on your PC. Files remain in the active app session until you clear them or the session ends.</div>
 """, unsafe_allow_html=True)
 
 def reset_workflow():
@@ -129,14 +132,23 @@ if step == 1:
     if uploaded:
         raw = uploaded.getvalue()
         suffix = Path(uploaded.name).suffix.lower()
-        if suffix == ".pdf":
-            extracted_text, error = extract_pdf(raw)
-        else:
-            extracted_text, error = ocr_image(raw)
+        try:
+            if suffix == ".pdf":
+                extracted_text, error = extract_pdf(raw)
+            else:
+                extracted_text, error = ocr_image(raw)
+        except Exception as exc:
+            extracted_text, error = "", f"LocalLens couldn’t open this file ({exc}). Check that it is a valid PDF or image, then try another file."
         if error:
             st.warning(error)
+            st.caption("Your original file is not changed. Try a clear PDF, PNG, JPG, or TIFF file.")
+            if st.button("Start over", on_click=reset_workflow):
+                st.rerun()
         elif not extracted_text:
             st.warning("No readable text was found. Check the scan quality and make sure local Tesseract OCR is installed for images or scanned PDFs.")
+            st.caption("Try a sharper, well-lit image or a text-based PDF. Your original file is not changed.")
+            if st.button("Start over", on_click=reset_workflow):
+                st.rerun()
         else:
             doc_id = hashlib.sha1(raw).hexdigest()[:10]
             detected = find_fields(extracted_text)
@@ -181,17 +193,35 @@ elif step == 2:
     extracted_text = st.session_state["locallens_text"]
     detected = st.session_state.get("locallens_fields", {}) or {"Field 1": ""}
     doc_id = st.session_state["locallens_doc_id"]
-    st.markdown('<h2 class="screen-title">Review extracted details</h2><div class="screen-intro">Compare each value with the source, then continue when it looks right.</div>', unsafe_allow_html=True)
+    st.markdown('<h2 class="screen-title">Review extracted details</h2><div class="screen-intro">Compare each value with the source, check any flagged fields, and correct anything that looks wrong.</div>', unsafe_allow_html=True)
     left, right = st.columns([1.05, 1])
     edited = {label: st.session_state.get(f"field_{doc_id}_{label}", value) for label, value in detected.items()}
     with right:
         with st.container(border=True):
             st.subheader("Check the fields")
             st.caption("These are suggestions. Correct anything that doesn’t match.")
+            st.info("Evidence labels show whether a value appears in the extracted source text and passes a basic format check. They are not AI or OCR accuracy scores.")
             edited = {}
             for label, value in detected.items():
                 edited[label] = st.text_input(label, value=value, key=f"field_{doc_id}_{label}")
-                st.caption(f"{value_status(label, edited[label])} · verify with the source")
+                value = edited[label]
+                evidence = source_evidence(extracted_text, value)
+                source_found = bool(value.strip()) and not evidence.startswith("Source text wasn’t matched")
+                format_ok = value_status(label, value) == "Format looks OK" or (label == "Name" and bool(value.strip()))
+                if source_found and format_ok:
+                    st.markdown('<span class="status-pill">✓ Found in source · format looks valid</span>', unsafe_allow_html=True)
+                else:
+                    reasons = []
+                    if not source_found:
+                        reasons.append("not matched in source")
+                    if not format_ok:
+                        reasons.append(value_status(label, value).lower())
+                    st.markdown('<span class="status-pill review-pill">⚠ Please review · ' + escape(" · ".join(reasons)) + '</span>', unsafe_allow_html=True)
+                st.caption("Check this value against the document before exporting.")
+            common_fields = {"Name", "Email", "Phone", "Date", "ID Number"}
+            missing_fields = sorted(common_fields - set(detected))
+            if missing_fields:
+                st.warning("Not found in this document: " + ", ".join(missing_fields) + ". You can still review and export the fields that were found.")
             with st.expander("Show source text for these values"):
                 for label, value in edited.items():
                     st.markdown(f"**{label}**")
@@ -206,6 +236,7 @@ elif step == 2:
         with st.container(border=True):
             st.subheader("Document preview")
             st.caption(name)
+            st.caption("Matched values are highlighted where LocalLens can locate them. Use the source text and the original document to confirm each value.")
             if suffix == ".pdf":
                 preview, highlighted = highlight_pdf_preview(raw, edited)
             else:
@@ -233,6 +264,9 @@ elif step == 2:
             st.session_state["locallens_redact_values"] = redact_values
             st.session_state["workflow_step"] = 3
             st.rerun()
+    if st.button("Start over with another document", key="review_start_over"):
+        reset_workflow()
+        st.rerun()
 
 elif step == 3:
     if "locallens_document" not in st.session_state:
@@ -276,3 +310,6 @@ elif step == 3:
             st.rerun()
     with clear_col:
         st.button("Finish and clear document", on_click=reset_workflow, use_container_width=True)
+    if st.button("Start over with another document", key="export_start_over"):
+        reset_workflow()
+        st.rerun()
